@@ -22,6 +22,12 @@ Always comply with the game’s terms of service.
 
 
 ---
+## Showcase
+
+This youtube video showcases all of the features as of right now:
+
+https://youtu.be/uo_AdHLiIgo
+
 
 ## Features
 
