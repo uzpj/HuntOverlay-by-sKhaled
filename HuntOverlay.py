@@ -630,7 +630,7 @@ class DotChip(QtWidgets.QPushButton):
             "border-radius:10px;"
             f"background: rgb({f.red()},{f.green()},{f.blue()});"
             "}"
-            "QPushButton:hover{filter:brightness(1.05);}"
+            "QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,50), stop:1 transparent); }"
         )
 
     def setFill(self, c: QtGui.QColor):
@@ -1521,3 +1521,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
     sys.exit(app.exec())
+
