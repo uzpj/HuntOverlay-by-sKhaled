@@ -20,57 +20,51 @@
 #   Draws POIs in that rectangle using normalized coordinates derived from a 4096x4096 grid
 #
 # New features in this version
-#   1) Config version gate
-#      If config.json missing or version mismatch, it is replaced with a fresh default config.
-#      Current config version: CONFIG_VERSION
 #
-#   2) Aspect aware rectangles
-#      For each map, config stores rect_ratio_by_aspect:
-#         "16:9", "21:9", "32:9"
-#      On launch, the app detects the current screen aspect and uses the corresponding ratio.
+# Hold to show overlay:
+# Added a "Hold Tab to show overlay" checkbox in the panel.
+# When enabled, the overlay is visible only while the toggle key is held.
+# When disabled, the overlay uses the existing toggle behavior.
+# The setting is persisted to config.json and reloads correctly after reset.
 #
-#   3) GUI keybind editor
-#      Keybinds can be changed from the GUI instead of editing config.json manually.
+# Tab safety logic:
+# The overlay toggle key (Tab by default) is ignored while Ctrl, Alt, or Shift
+# are held. This prevents accidental overlay activation during combinations
+# such as Alt+Tab, Ctrl+Tab, or Shift+Tab.
 #
-#   4) Default hidden possible_xp entries since they do not include xp as of the post malone event.
-#      config.settings.hidden.possible_xp includes:
-#         "armories:1508:2096" "
-#         "big_towers:1320:3328"
+# Startup behavior and tray handling
+# The application now starts minimized to the system tray if you have it set to start meinimized.
+# Fresh configs default to tray-minimize disabled.
 #
-#   5) Reset to default config button
-#      A GUI button overwrites config.json with fresh defaults and reloads settings immediately.
+# Primary monitor enforcement
+# The overlay window geometry is explicitly bound to QGuiApplication.primaryScreen().
+# Each time the overlay is shown, geometry is re-applied to ensure it opens
+# on the primary monitor.
 #
-#   6) Minimize to system tray
-#      A GUI checkbox controls whether minimizing hides the panel into the system tray.
+# New POI type: brutes
+# Added support for the "brutes" category:
+# - Included in type order and drawing pass
+# - Loaded from poiData.json like other styled categories ( Still Empty As Of Right Now )  
 #
-# Map order and numeric switching
-# Map order is set to match release order as requested:
-#   1 Stillwater Bayou
-#   2 Lawson Delta
-#   3 DeSalle
-#   4 Mammon's Gulch
-#
-# Hotkeys
-# All hotkeys are configurable via GUI.
-# Default:
-#   toggle_master        ` (backtick)
-#   toggle_overlay       Tab
-#   hide_overlay         H
-#   map_1..map_4         1 2 3 4
-#   hide_hovered         Ctrl Alt Shift Delete
-#
+# Config version update
+# Retained guard against invalid indexed map names (MAPS.index).
+# Bumped CONFIG_VERSION to trigger migration to updated defaults and settings.
+
+
 # Hide behavior note
 # If you hide a POI while hovering possible_xp, it only hides it from possible_xp,
 # not from its source category (armories, towers, big_towers).
 # Hidden POIs are stored per category in config.json.
 
+# Possible Future Update:
+# Adding the ability to retain config settings through version updates.
 import sys, os, json, ctypes, traceback, shutil
 from PySide6 import QtCore, QtGui, QtWidgets
 
 # Map order is intentionally set to the release order requested.
 MAPS = ["Stillwater Bayou", "Lawson Delta", "DeSalle", "Mammon's Gulch"]
 
-CONFIG_VERSION = "1.0.1"
+CONFIG_VERSION = "1.0.2"
 
 user32 = ctypes.windll.user32
 GetKey = user32.GetAsyncKeyState
@@ -266,7 +260,14 @@ def get_map_block(game_data, fmt: str, map_name: str):
         return None
 
     if fmt == "indexed_r":
-        idx = MAPS.index(map_name)
+        try:
+
+            idx = MAPS.index(map_name)
+
+        except ValueError:
+
+            return None
+
         for m in game_data:
             if isinstance(m, dict) and m.get("i") == idx:
                 return m
@@ -330,6 +331,7 @@ def build_default_config():
             "master_on": True,
             "global_scale": 1.00,
             "minimize_to_tray": False,
+            "hold_tab_to_show": False,
             "keybinds": default_keybinds(),
             "types": {},
             "hidden": {"possible_xp": list(DEFAULT_HIDDEN_POSSIBLE_XP)},
@@ -656,8 +658,10 @@ class Panel(QtWidgets.QWidget):
     requestBindEdit = QtCore.Signal(str)
     resetConfig = QtCore.Signal()
     minimizeToTrayChanged = QtCore.Signal(bool)
+    holdTabModeChanged = QtCore.Signal(bool)
 
-    def __init__(self, type_order, type_specs, start_scale: float, help_text: str, binds_label_map: dict, start_min_to_tray: bool, p=None):
+
+    def __init__(self, type_order, type_specs, start_scale: float, help_text: str, binds_label_map: dict, start_min_to_tray: bool, start_hold_tab_mode: bool, p=None):
         super().__init__(p, QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
         self.setWindowTitle("Hunt Map Overlay By sKhaled")
         self.setFixedWidth(360)
@@ -767,6 +771,15 @@ class Panel(QtWidgets.QWidget):
         self.chk_tray.setChecked(bool(start_min_to_tray))
         v.addWidget(self.chk_tray)
         self.chk_tray.toggled.connect(lambda b: self.minimizeToTrayChanged.emit(bool(b)))
+        
+        self.chk_hold_tab = QtWidgets.QCheckBox("Hold Tab to show overlay")
+
+        self.chk_hold_tab.setChecked(bool(start_hold_tab_mode))
+
+        v.addWidget(self.chk_hold_tab)
+
+        self.chk_hold_tab.toggled.connect(lambda b: self.holdTabModeChanged.emit(bool(b)))
+
 
         v.addSpacing(6)
 
@@ -818,7 +831,8 @@ class Overlay(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setMouseTracking(False)
-        self.showFullScreen()
+        self._set_overlay_to_primary_monitor()
+
 
         if ICON:
             QtWidgets.QApplication.instance().setWindowIcon(QtGui.QIcon(ICON))
@@ -845,6 +859,7 @@ class Overlay(QtWidgets.QWidget):
             "big_towers",
             "workbenches",
             "wild_targets",
+            "brutes",
             "beetles",
             "easter_eggs",
             "melee_weapons",
@@ -871,7 +886,7 @@ class Overlay(QtWidgets.QWidget):
             "hide_hovered": "Hide hovered POI",
         }
         help_text = self._build_help_text()
-        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, help_text, binds_label_map, self.minimize_to_tray)
+        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, help_text, binds_label_map, self.minimize_to_tray, self.hold_tab_mode)
         if ICON:
             self.panel.setWindowIcon(QtGui.QIcon(ICON))
 
@@ -885,6 +900,7 @@ class Overlay(QtWidgets.QWidget):
         self.panel.requestBindEdit.connect(self._edit_keybind)
         self.panel.resetConfig.connect(self._reset_config_to_defaults)
         self.panel.minimizeToTrayChanged.connect(self._set_minimize_to_tray)
+        self.panel.holdTabModeChanged.connect(self._set_hold_tab_mode)
 
         # Seed GUI with current state.
         self.panel.chk_nums.setChecked(self.num_sw)
@@ -893,15 +909,21 @@ class Overlay(QtWidgets.QWidget):
             self.panel.setTypeState(k, self.types[k]["enabled"], rgb2q(self.types[k]["color"], self.type_specs[k]["default_fill"]))
 
         self.panel.move(40, 40)
-        self.panel.show()
 
         # System tray setup.
         self.tray = None
-        self._ensure_tray()
+        if self.minimize_to_tray:
+            self._ensure_tray()
 
-        # Make overlay click through and topmost.
+        # Make overlay click through and topmost on primary monitor.
         click_through(int(self.winId()))
-        (self.show if self.visible and self.master else self.hide)()
+        if self.visible and self.master:
+
+            self._show_overlay_on_primary()
+
+        else:
+
+            self.hide()
         topmost(int(self.winId()))
 
         # Edge detection for hotkeys so they do not toggle repeatedly while held.
@@ -920,7 +942,12 @@ class Overlay(QtWidgets.QWidget):
 
         # Save once at the end to ensure config contains any missing keys we added.
         self._save()
-
+        
+        # Start with the control panel minimized to tray.
+        if self.minimize_to_tray:
+            self._hide_panel_to_tray()
+        else:
+            self.panel.show()
         # Timer tick drives input polling and hover updates.
         self.t = QtCore.QTimer(self)
         self.t.timeout.connect(self._tick_safe)
@@ -986,7 +1013,13 @@ class Overlay(QtWidgets.QWidget):
     def _set_minimize_to_tray(self, v: bool):
         self.minimize_to_tray = bool(v)
         self._save()
+    def _set_hold_tab_mode(self, v: bool):
 
+        self.hold_tab_mode = bool(v)
+
+        self._save()
+
+        self.panel.setHelpText(self._build_help_text())
     def _build_type_specs(self):
         specs = {}
 
@@ -1012,6 +1045,7 @@ class Overlay(QtWidgets.QWidget):
         add_from_style("big_towers", "Watch Towers")
         add_from_style("workbenches", "Workbenches")
         add_from_style("wild_targets", "Wild Targets")
+        add_from_style("brutes", "Brutes")
         add_from_style("beetles", "Beetles")
         add_from_style("easter_eggs", "Easter Eggs")
         add_from_style("melee_weapons", "Melee Weapons")
@@ -1069,6 +1103,8 @@ class Overlay(QtWidgets.QWidget):
         if self.global_scale > 5.00: self.global_scale = 5.00
 
         self.minimize_to_tray = bool(st.get("minimize_to_tray", False))
+        self.hold_tab_mode = bool(st.get("hold_tab_to_show", False))
+
 
         self.binds = self._normalize_keybinds(st.get("keybinds", {}))
 
@@ -1115,6 +1151,9 @@ class Overlay(QtWidgets.QWidget):
             return False
         if vk == 0:
             return False
+        if vk == VK_TAB and (key(VK_CONTROL) or key(VK_MENU) or key(VK_SHIFT)):
+
+            return False
 
         if name == "hide_hovered":
             need_ctrl = bool(b.get("ctrl", True))
@@ -1147,7 +1186,7 @@ class Overlay(QtWidgets.QWidget):
     def _build_help_text(self) -> str:
         return (
             f"{self._bind_label('toggle_master'):12s} Toggle master on or off\n"
-            f"{self._bind_label('toggle_overlay'):12s} Show or hide overlay\n"
+            f"{self._bind_label('toggle_overlay'):12s} {'Hold to show overlay' if self.hold_tab_mode else 'Show or hide overlay'}\n"
             f"{self._bind_label('hide_overlay'):12s} Hide overlay\n"
             f"{vk_to_label(self.binds['map_1']['vk'])} {vk_to_label(self.binds['map_2']['vk'])} {vk_to_label(self.binds['map_3']['vk'])} {vk_to_label(self.binds['map_4']['vk'])}      Switch map (if enabled)\n"
             f"{self._bind_label('hide_hovered')}   Hide hovered POI for current category only\n"
@@ -1168,6 +1207,7 @@ class Overlay(QtWidgets.QWidget):
         st["master_on"] = self.master
         st["global_scale"] = float(self.global_scale)
         st["minimize_to_tray"] = bool(self.minimize_to_tray)
+        st["hold_tab_to_show"] = bool(self.hold_tab_mode)
 
         st["types"] = self.types
         st["keybinds"] = self.binds
@@ -1194,6 +1234,26 @@ class Overlay(QtWidgets.QWidget):
             max(1, int(rr["rw"] * W)),
             max(1, int(rr["rh"] * H))
         )
+    
+    def _set_overlay_to_primary_monitor(self):
+
+        ps = QtGui.QGuiApplication.primaryScreen()
+
+        if ps is None:
+
+            return
+
+        self.setGeometry(ps.geometry())
+
+
+
+    def _show_overlay_on_primary(self):
+
+        self._set_overlay_to_primary_monitor()
+
+        self.show()
+
+        topmost(int(self.winId()))
 
     def _set_num_switch(self, v: bool):
         self.num_sw = bool(v)
@@ -1243,6 +1303,7 @@ class Overlay(QtWidgets.QWidget):
         # Push state back into GUI widgets.
         self.panel.chk_nums.setChecked(self.num_sw)
         self.panel.chk_tray.setChecked(self.minimize_to_tray)
+        self.panel.chk_hold_tab.setChecked(self.hold_tab_mode)
         self.panel.scale_box.setValue(float(self.global_scale))
         self.panel.setMap(self.prof)
 
@@ -1388,13 +1449,26 @@ class Overlay(QtWidgets.QWidget):
             return
 
         nt = self._bind_pressed("toggle_overlay")
-        if nt and not self.p_toggle_overlay:
-            self.visible = not self.visible
-            (self.show if self.visible else self.hide)()
-            if self.visible:
-                topmost(int(self.winId()))
-            self._save()
-        self.p_toggle_overlay = nt
+        if self.hold_tab_mode:
+            next_visible = bool(nt)
+            if self.visible != next_visible:
+                self.visible = next_visible
+                if self.visible:
+                    self._show_overlay_on_primary()
+                else:
+                    self.hide()
+                self._save()
+            self.p_toggle_overlay = nt
+        else:
+            if nt and not self.p_toggle_overlay:
+                self.visible = not self.visible
+                if self.visible:
+                    self._show_overlay_on_primary()
+                else:
+                    self.hide()
+                self._save()
+            self.p_toggle_overlay = nt
+
 
         # Map switching uses MAPS order. Since MAPS changed, 2 is Lawson and 3 is DeSalle.
         if self.visible and self.num_sw:
