@@ -332,6 +332,7 @@ def build_default_config():
             "global_scale": 1.00,
             "minimize_to_tray": False,
             "hold_tab_to_show": False,
+            "safe_tab_mode": True,
             "keybinds": default_keybinds(),
             "types": {},
             "hidden": {"possible_xp": list(DEFAULT_HIDDEN_POSSIBLE_XP)},
@@ -659,9 +660,10 @@ class Panel(QtWidgets.QWidget):
     resetConfig = QtCore.Signal()
     minimizeToTrayChanged = QtCore.Signal(bool)
     holdTabModeChanged = QtCore.Signal(bool)
+    safeTabModeChanged = QtCore.Signal(bool)
 
 
-    def __init__(self, type_order, type_specs, start_scale: float, help_text: str, binds_label_map: dict, start_min_to_tray: bool, start_hold_tab_mode: bool, p=None):
+    def __init__(self, type_order, type_specs, start_scale: float, help_text: str, binds_label_map: dict, start_min_to_tray: bool, start_hold_tab_mode: bool, start_safe_tab_mode: bool, p=None):
         super().__init__(p, QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
         self.setWindowTitle("Hunt Map Overlay By sKhaled")
         self.setFixedWidth(360)
@@ -773,13 +775,14 @@ class Panel(QtWidgets.QWidget):
         self.chk_tray.toggled.connect(lambda b: self.minimizeToTrayChanged.emit(bool(b)))
         
         self.chk_hold_tab = QtWidgets.QCheckBox("Hold Tab to show overlay")
-
         self.chk_hold_tab.setChecked(bool(start_hold_tab_mode))
-
         v.addWidget(self.chk_hold_tab)
-
         self.chk_hold_tab.toggled.connect(lambda b: self.holdTabModeChanged.emit(bool(b)))
 
+        self.chk_safe_tab = QtWidgets.QCheckBox("Disallow Tab when Ctrl/Shift/Alt held")
+        self.chk_safe_tab.setChecked(bool(start_safe_tab_mode))
+        v.addWidget(self.chk_safe_tab)
+        self.chk_safe_tab.toggled.connect(lambda b: self.safeTabModeChanged.emit(bool(b)))
 
         v.addSpacing(6)
 
@@ -886,7 +889,7 @@ class Overlay(QtWidgets.QWidget):
             "hide_hovered": "Hide hovered POI",
         }
         help_text = self._build_help_text()
-        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, help_text, binds_label_map, self.minimize_to_tray, self.hold_tab_mode)
+        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, help_text, binds_label_map, self.minimize_to_tray, self.hold_tab_mode, self.safe_tab_mode)
         if ICON:
             self.panel.setWindowIcon(QtGui.QIcon(ICON))
 
@@ -901,6 +904,7 @@ class Overlay(QtWidgets.QWidget):
         self.panel.resetConfig.connect(self._reset_config_to_defaults)
         self.panel.minimizeToTrayChanged.connect(self._set_minimize_to_tray)
         self.panel.holdTabModeChanged.connect(self._set_hold_tab_mode)
+        self.panel.safeTabModeChanged.connect(self._set_safe_tab_mode)
 
         # Seed GUI with current state.
         self.panel.chk_nums.setChecked(self.num_sw)
@@ -1013,6 +1017,7 @@ class Overlay(QtWidgets.QWidget):
     def _set_minimize_to_tray(self, v: bool):
         self.minimize_to_tray = bool(v)
         self._save()
+
     def _set_hold_tab_mode(self, v: bool):
 
         self.hold_tab_mode = bool(v)
@@ -1020,6 +1025,14 @@ class Overlay(QtWidgets.QWidget):
         self._save()
 
         self.panel.setHelpText(self._build_help_text())
+
+    def _set_safe_tab_mode(self, v: bool):
+        self.safe_tab = bool(v)
+
+        self._save()
+
+        self.panel.setHelpText(self._build_help_text())
+
     def _build_type_specs(self):
         specs = {}
 
@@ -1104,7 +1117,7 @@ class Overlay(QtWidgets.QWidget):
 
         self.minimize_to_tray = bool(st.get("minimize_to_tray", False))
         self.hold_tab_mode = bool(st.get("hold_tab_to_show", False))
-
+        self.safe_tab_mode = bool(st.get("safe_tab_mode", True))
 
         self.binds = self._normalize_keybinds(st.get("keybinds", {}))
 
@@ -1151,8 +1164,9 @@ class Overlay(QtWidgets.QWidget):
             return False
         if vk == 0:
             return False
-        if vk == VK_TAB and (key(VK_CONTROL) or key(VK_MENU) or key(VK_SHIFT)):
 
+        safe_tab_violation = self.safe_tab_mode and (key(VK_CONTROL) or key(VK_MENU) or key(VK_SHIFT))
+        if vk == VK_TAB and safe_tab_violation:
             return False
 
         if name == "hide_hovered":
@@ -1208,6 +1222,7 @@ class Overlay(QtWidgets.QWidget):
         st["global_scale"] = float(self.global_scale)
         st["minimize_to_tray"] = bool(self.minimize_to_tray)
         st["hold_tab_to_show"] = bool(self.hold_tab_mode)
+        st["safe_tab_mode"] = bool(self.safe_tab_mode)
 
         st["types"] = self.types
         st["keybinds"] = self.binds
@@ -1304,6 +1319,7 @@ class Overlay(QtWidgets.QWidget):
         self.panel.chk_nums.setChecked(self.num_sw)
         self.panel.chk_tray.setChecked(self.minimize_to_tray)
         self.panel.chk_hold_tab.setChecked(self.hold_tab_mode)
+        self.panel.chk_safe_tab.setChecked(self.safe_tab_mode)
         self.panel.scale_box.setValue(float(self.global_scale))
         self.panel.setMap(self.prof)
 
