@@ -769,20 +769,9 @@ class Panel(QtWidgets.QWidget):
 
         v.addSpacing(8)
 
-        self.chk_tray = QtWidgets.QCheckBox("Minimize to system tray")
-        self.chk_tray.setChecked(bool(start_min_to_tray))
-        v.addWidget(self.chk_tray)
-        self.chk_tray.toggled.connect(lambda b: self.minimizeToTrayChanged.emit(bool(b)))
-        
-        self.chk_hold_tab = QtWidgets.QCheckBox("Hold Tab to show overlay")
-        self.chk_hold_tab.setChecked(bool(start_hold_tab_mode))
-        v.addWidget(self.chk_hold_tab)
-        self.chk_hold_tab.toggled.connect(lambda b: self.holdTabModeChanged.emit(bool(b)))
-
-        self.chk_safe_tab = QtWidgets.QCheckBox("Lock Tab while Ctrl/Shift/Alt held")
-        self.chk_safe_tab.setChecked(bool(start_safe_tab_mode))
-        v.addWidget(self.chk_safe_tab)
-        self.chk_safe_tab.toggled.connect(lambda b: self.safeTabModeChanged.emit(bool(b)))
+        self.chk_tray = self._create_option(v, "Minimize to system tray", start_min_to_tray, self.minimizeToTrayChanged)
+        self.chk_hold_tab = self._create_option(v, "Hold Tab to show overlay", start_hold_tab_mode, self.holdTabModeChanged)
+        self.chk_safe_tab = self._create_option(v, "Lock Tab while Ctrl/Shift/Alt held", start_safe_tab_mode, self.safeTabModeChanged)
 
         v.addSpacing(6)
 
@@ -801,6 +790,13 @@ class Panel(QtWidgets.QWidget):
         v.addWidget(self.help)
 
         v.addStretch(1)
+
+    def _create_option(self, v, title, start_val, func):
+        widget = QtWidgets.QCheckBox(title)
+        widget.setChecked(bool(start_val))
+        v.addWidget(widget)
+        widget.toggled.connect(lambda b: func.emit(bool(b)))
+        return widget
 
     def _dec_scale(self):
         self.scale_box.setValue(max(self.scale_box.minimum(), self.scale_box.value() - 0.05))
