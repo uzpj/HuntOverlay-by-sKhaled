@@ -332,7 +332,7 @@ def build_default_config():
             "global_scale": 1.00,
             "minimize_to_tray": False,
             "hold_tab_to_show": False,
-            "safe_tab_mode": True,
+            "use_safe_tab_mode": True,
             "keybinds": default_keybinds(),
             "types": {},
             "hidden": {"possible_xp": list(DEFAULT_HIDDEN_POSSIBLE_XP)},
@@ -779,7 +779,7 @@ class Panel(QtWidgets.QWidget):
         v.addWidget(self.chk_hold_tab)
         self.chk_hold_tab.toggled.connect(lambda b: self.holdTabModeChanged.emit(bool(b)))
 
-        self.chk_safe_tab = QtWidgets.QCheckBox("Disallow Tab when Ctrl/Shift/Alt held")
+        self.chk_safe_tab = QtWidgets.QCheckBox("Lock Tab while Ctrl/Shift/Alt held")
         self.chk_safe_tab.setChecked(bool(start_safe_tab_mode))
         v.addWidget(self.chk_safe_tab)
         self.chk_safe_tab.toggled.connect(lambda b: self.safeTabModeChanged.emit(bool(b)))
@@ -1027,7 +1027,7 @@ class Overlay(QtWidgets.QWidget):
         self.panel.setHelpText(self._build_help_text())
 
     def _set_safe_tab_mode(self, v: bool):
-        self.safe_tab = bool(v)
+        self.safe_tab_mode = bool(v)
 
         self._save()
 
@@ -1117,7 +1117,7 @@ class Overlay(QtWidgets.QWidget):
 
         self.minimize_to_tray = bool(st.get("minimize_to_tray", False))
         self.hold_tab_mode = bool(st.get("hold_tab_to_show", False))
-        self.safe_tab_mode = bool(st.get("safe_tab_mode", True))
+        self.safe_tab_mode = bool(st.get("use_safe_tab_mode", True))
 
         self.binds = self._normalize_keybinds(st.get("keybinds", {}))
 
@@ -1222,7 +1222,7 @@ class Overlay(QtWidgets.QWidget):
         st["global_scale"] = float(self.global_scale)
         st["minimize_to_tray"] = bool(self.minimize_to_tray)
         st["hold_tab_to_show"] = bool(self.hold_tab_mode)
-        st["safe_tab_mode"] = bool(self.safe_tab_mode)
+        st["use_safe_tab_mode"] = bool(self.safe_tab_mode)
 
         st["types"] = self.types
         st["keybinds"] = self.binds
