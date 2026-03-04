@@ -3,14 +3,16 @@ import traceback
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from HO.Static.Constants import VK_TAB, VK_CONTROL, VK_MENU, VK_SHIFT, \
-    MAPS, CONFIG_VERSION, DEFAULT_HIDDEN_POSSIBLE_XP
+from HO.Static.Constants import (
+    VK_TAB, VK_CONTROL, VK_MENU, VK_SHIFT, MAPS, CONFIG_VERSION, DEFAULT_HIDDEN_POSSIBLE_XP
+)
 
-from HO.Static.Util import ICON, DATA_PATH, STYLE_PATH, udir, load_json, detect_data_format, screenWH, detect_aspect_label, \
-    load_or_replace_config, click_through, rgb2q, topmost, find_style_by_category, qcolor_from_any, \
-    overlay_radius_from_spec, default_keybinds, q2rgb, \
-    key, vk_to_label, save_json, default_rect_ratio_16_9, build_default_config, \
-    get_map_block, get_category_list, rotate90cw_norm, KeyCaptureDialog, default_rect_ratio_by_aspect, CONFIG_PATH
+from HO.Static.Util import (
+    ICON, DATA_PATH, STYLE_PATH, udir, load_json, detect_data_format, screenWH, detect_aspect_label,
+    load_or_replace_config, click_through, rgb2q, topmost, find_style_by_category, qcolor_from_any,
+    overlay_radius_from_spec, default_keybinds, q2rgb, key, vk_to_label, save_json, default_rect_ratio_16_9,
+    build_default_config, get_map_block, get_category_list, rotate90cw_norm, KeyCaptureDialog,
+    default_rect_ratio_by_aspect, CONFIG_PATH)
 
 from HO.Panel import Panel
 

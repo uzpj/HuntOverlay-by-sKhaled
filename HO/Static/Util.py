@@ -5,8 +5,10 @@ import sys
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from HO.Static.Constants import user32, VK_TAB, VK_CONTROL, VK_MENU, VK_H, VK1, VK_BT, VK2, VK3, VK4, VK_DELETE, VK_SHIFT, VK_ESC, \
-    MAPS, CONFIG_VERSION, DEFAULT_HIDDEN_POSSIBLE_XP
+from HO.Static.Constants import (
+    user32, VK_TAB, VK_CONTROL, VK_MENU, VK_H, VK1, VK_BT, VK2, VK3, VK4, VK_DELETE, VK_SHIFT, VK_ESC, MAPS,
+    CONFIG_VERSION, DEFAULT_HIDDEN_POSSIBLE_XP
+)
 
 GetKey = user32.GetAsyncKeyState
 
