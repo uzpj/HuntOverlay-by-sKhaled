@@ -1,9 +1,21 @@
-# Hunt Map Overlay by sKhaled
+# Hunt Map Overlay by sKhaled 
 
-A lightweight, real time Windows overlay for Hunt: Showdown that displays map POIs directly on screen.  
-Designed to be click through, configurable, and persistent, with all data stored locally and no game file modification.
+A lightweight, real-time Windows overlay for Hunt: Showdown that displays map POIs directly on screen.  
+Designed to be click-through, configurable, and persistent, with all data stored locally and no game file modification. 
 
 ---
+
+## Security Notice
+
+The only official repository for Hunt Map Overlay by sKhaled is:
+
+https://github.com/uzpj/HuntOverlay-by-sKhaled
+
+Official builds are distributed only through the Releases section of this repository.
+
+If you downloaded this program from another repository or website, it may contain modified or unsafe code. Always verify the source before running any executable.
+
+If you encounter another repository distributing this project with external downloads or modified binaries, treat it as untrusted unless verified.
 
 ## Disclaimer
 
