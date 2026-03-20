@@ -58,13 +58,15 @@
 
 # Possible Future Update:
 # Adding the ability to retain config settings through version updates.
-import sys, os, json, ctypes, traceback, shutil
+import sys, os, json, ctypes, traceback, shutil, threading
+import urllib.request, urllib.error
+from datetime import datetime, timedelta
 from PySide6 import QtCore, QtGui, QtWidgets
 
 # Map order is intentionally set to the release order requested.
 MAPS = ["Stillwater Bayou", "Lawson Delta", "DeSalle", "Mammon's Gulch"]
 
-CONFIG_VERSION = "1.0.2"
+CONFIG_VERSION = "1.2.0"
 
 user32 = ctypes.windll.user32
 GetKey = user32.GetAsyncKeyState
@@ -139,6 +141,11 @@ ICON = os.path.join(bd(), "myicon.ico") if os.path.isfile(os.path.join(bd(), "my
 DATA_PATH = ensure_user_file("data.json")
 STYLE_PATH = ensure_user_file("poiData.json")
 CONFIG_PATH = os.path.join(udir(), "config.json")
+META_PATH = os.path.join(udir(), "update_meta.json")
+
+DATA_URL  = "https://hunt.kamille.ovh/maps/data.json"
+STYLE_URL = "https://hunt.kamille.ovh/maps/poiData.json"
+UPDATE_INTERVAL = timedelta(hours=24)
 
 def load_json(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -150,6 +157,45 @@ def save_json(path: str, obj) -> None:
             f.write(json.dumps(obj, indent=2))
     except:
         pass
+
+def load_update_meta() -> dict:
+    try:
+        return load_json(META_PATH)
+    except:
+        return {}
+
+def save_update_meta(meta: dict) -> None:
+    save_json(META_PATH, meta)
+
+def needs_data_update() -> bool:
+    last = load_update_meta().get("last_check", "")
+    if not last:
+        return True
+    try:
+        return datetime.now() - datetime.fromisoformat(last) >= UPDATE_INTERVAL
+    except:
+        return True
+
+def fetch_remote_file(url: str, dst: str) -> bool:
+    """Download url, validate as JSON, write to dst. Returns True on success."""
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            raw = r.read()
+        json.loads(raw.decode("utf-8"))  # validate before overwriting
+        with open(dst, "wb") as f:
+            f.write(raw)
+        return True
+    except Exception:
+        return False
+
+def format_last_update(ts: str) -> str:
+    if not ts:
+        return "Data: never updated"
+    try:
+        dt = datetime.fromisoformat(ts)
+        return "Data updated: " + dt.strftime("%Y-%m-%d %H:%M")
+    except:
+        return "Data: unknown"
 
 def q2rgb(c: QtGui.QColor):
     return [c.red(), c.green(), c.blue()]
@@ -182,12 +228,17 @@ def detect_aspect_label(w: int, h: int) -> str:
     return "16:9"
 
 def default_rect_ratio_16_9():
-    return {"rx": 0.30859375, "ry": 0.14583333333333334, "rw": 0.383984375, "rh": 0.6833333333333333}
+    return {
+  "rx": 0.308203125,
+  "ry": 0.13819444444444445,
+  "rw": 0.384375,
+  "rh": 0.6833333333333333
+}
 
 def default_rect_ratio_21_9():
-    return {"rx": 0.35625, "ry": 0.14722222222222223, "rw": 0.287109375, "rh": 0.6814814814814815}
+    return {"rx": 0.35625, "ry": 0.13796296296296295, "rw": 0.287890625, "rh": 0.6833333333333333}
 def default_rect_ratio_32_9():
-    return {"rx": 0.404296875, "ry": 0.14722222222222223, "rw": 0.191015625, "rh": 0.6791666666666667}
+    return {"rx": 0.40390625, "ry": 0.1375, "rw": 0.1921875, "rh": 0.6833333333333333}
 
 def default_rect_ratio_by_aspect():
     return {"16:9": default_rect_ratio_16_9(), "21:9": default_rect_ratio_21_9(), "32:9": default_rect_ratio_32_9()}
@@ -332,17 +383,35 @@ def build_default_config():
             "global_scale": 1.00,
             "minimize_to_tray": False,
             "hold_tab_to_show": False,
-            "use_safe_tab_mode": True,
+            "block_shift_tab": True,
             "keybinds": default_keybinds(),
             "types": {},
             "hidden": {"possible_xp": list(DEFAULT_HIDDEN_POSSIBLE_XP)},
         },
     }
 
+def deep_merge(default: dict, existing: dict) -> dict:
+    """
+    Merge existing user config into default.
+    - New keys from default are added.
+    - Existing user values are preserved.
+    - Dicts are merged recursively.
+    """
+    result = {}
+    for k, v in default.items():
+        if k not in existing:
+            result[k] = v
+        elif isinstance(v, dict) and isinstance(existing[k], dict):
+            result[k] = deep_merge(v, existing[k])
+        else:
+            result[k] = existing[k]
+    return result
+
 def load_or_replace_config():
     """
-    Option C
-    If config.json missing OR version mismatch, replace with a fresh default config.
+    If config.json is missing or unreadable, write and return fresh defaults.
+    If the version is outdated, migrate by merging user values into the new defaults.
+    User settings are preserved across version updates.
     """
     if not os.path.isfile(CONFIG_PATH):
         d = build_default_config()
@@ -354,10 +423,21 @@ def load_or_replace_config():
     except:
         d = {}
 
-    if not isinstance(d, dict) or d.get("version") != CONFIG_VERSION:
+    if not isinstance(d, dict):
         d = build_default_config()
         save_json(CONFIG_PATH, d)
         return d
+
+    if d.get("version") != CONFIG_VERSION:
+        d = deep_merge(build_default_config(), d)
+        # Always apply the latest default rect ratios on version change so that
+        # map coordinate updates from Hunt patches are picked up automatically.
+        fresh_rects = default_rect_ratio_by_aspect()
+        for m in MAPS:
+            if isinstance(d.get("profiles", {}).get(m), dict):
+                d["profiles"][m]["rect_ratio_by_aspect"] = fresh_rects
+        d["version"] = CONFIG_VERSION
+        save_json(CONFIG_PATH, d)
 
     return d
 
@@ -660,143 +740,182 @@ class Panel(QtWidgets.QWidget):
     resetConfig = QtCore.Signal()
     minimizeToTrayChanged = QtCore.Signal(bool)
     holdTabModeChanged = QtCore.Signal(bool)
-    safeTabModeChanged = QtCore.Signal(bool)
+    blockShiftTabChanged = QtCore.Signal(bool)
+    forceRefresh = QtCore.Signal()
 
 
-    def __init__(self, type_order, type_specs, start_scale: float, help_text: str, binds_label_map: dict, start_min_to_tray: bool, start_hold_tab_mode: bool, start_safe_tab_mode: bool, p=None):
+    def __init__(self, type_order, type_specs, start_scale: float, binds_label_map: dict, binds_current: dict, aspect: str, config_version: str, start_min_to_tray: bool, start_hold_tab_mode: bool, start_block_shift_tab: bool, p=None):
         super().__init__(p, QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
-        self.setWindowTitle("Hunt Map Overlay By sKhaled")
-        self.setFixedWidth(360)
+        self.setWindowTitle("Hunt Map Overlay")
+        self.setFixedWidth(310)
         self.setStyleSheet(
-            "QWidget{background:#1e1f22;color:#e6e6e6;}"
-            "QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background:#2b2d30;color:#e6e6e6;border:1px solid #3a3c40;}"
-            "QPushButton{background:#2b2d30;border:1px solid #3a3c40;padding:4px 8px;}"
+            "QWidget{background:#1e1f22;color:#e6e6e6;font-size:12px;}"
+            "QTabWidget::pane{border:1px solid #2b2d30;top:-1px;}"
+            "QTabBar::tab{background:#2b2d30;color:#aaaaaa;padding:5px 14px;border:1px solid #3a3c40;border-bottom:none;}"
+            "QTabBar::tab:selected{background:#1e1f22;color:#e6e6e6;}"
+            "QTabBar::tab:hover{color:#e6e6e6;}"
+            "QComboBox,QSpinBox,QDoubleSpinBox{background:#2b2d30;color:#e6e6e6;border:1px solid #3a3c40;padding:2px 4px;}"
+            "QPushButton{background:#2b2d30;border:1px solid #3a3c40;padding:3px 8px;}"
             "QPushButton:hover{background:#34363a;}"
+            "QPushButton:disabled{color:#555555;}"
             "QLabel{color:#cfd1d4;}"
-            "QCheckBox{spacing:10px;}"
-            "QCheckBox::indicator{width:16px;height:16px;}"
+            "QCheckBox{spacing:8px;}"
+            "QCheckBox::indicator{width:14px;height:14px;}"
         )
 
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(0)
+
+        tabs = QtWidgets.QTabWidget()
+        outer.addWidget(tabs)
+
+        # ── Tab 1: Types ──────────────────────────────────────────────
+        types_page = QtWidgets.QWidget()
+        tv = QtWidgets.QVBoxLayout(types_page)
+        tv.setContentsMargins(8, 8, 8, 8)
+        tv.setSpacing(2)
+
         self.type_widgets = {}
-        v = QtWidgets.QVBoxLayout(self)
-
-        title = QtWidgets.QLabel("POI Types")
-        f = title.font()
-        f.setBold(True)
-        title.setFont(f)
-        v.addWidget(title)
-
         for tkey in type_order:
             spec = type_specs[tkey]
             chk = QtWidgets.QCheckBox(spec["label"])
             chip = DotChip(spec["default_fill"], spec["border"])
             row = QtWidgets.QHBoxLayout()
+            row.setSpacing(4)
             row.addWidget(chk)
             row.addStretch(1)
             row.addWidget(chip)
-            v.addLayout(row)
+            tv.addLayout(row)
             self.type_widgets[tkey] = (chk, chip)
             chk.toggled.connect(lambda val, k=tkey: self.typeToggled.emit(k, val))
             chip.changed.connect(lambda col, k=tkey: self.typeColor.emit(k, col))
-
             if tkey == "possible_xp":
                 line = QtWidgets.QFrame()
                 line.setFrameShape(QtWidgets.QFrame.HLine)
-                line.setFrameShadow(QtWidgets.QFrame.Sunken)
-                line.setStyleSheet("color:#2b2d30;background:#2b2d30;max-height:1px;")
-                v.addWidget(line)
+                line.setStyleSheet("background:#2b2d30;max-height:1px;margin:2px 0;")
+                tv.addWidget(line)
 
-        v.addSpacing(6)
+        tv.addSpacing(6)
 
-        self.chk_nums = QtWidgets.QCheckBox("Enable 1 to 4 Map Switch")
-        v.addWidget(self.chk_nums)
-        self.chk_nums.toggled.connect(self.tnums)
-
-        v.addWidget(QtWidgets.QLabel("Map:"))
+        map_row = QtWidgets.QHBoxLayout()
+        map_row.addWidget(QtWidgets.QLabel("Map:"))
         self.cmb = QtWidgets.QComboBox()
         self.cmb.addItems(MAPS)
-        v.addWidget(self.cmb)
+        map_row.addWidget(self.cmb, 1)
+        tv.addLayout(map_row)
         self.cmb.currentTextChanged.connect(self.mapSel)
 
-        v.addSpacing(6)
+        self.chk_nums = QtWidgets.QCheckBox("1–4 map switch")
+        tv.addWidget(self.chk_nums)
+        self.chk_nums.toggled.connect(self.tnums)
 
-        v.addWidget(QtWidgets.QLabel("POI Size Scale (global):"))
+        tv.addSpacing(6)
+
         scale_row = QtWidgets.QHBoxLayout()
-        self.btn_dec = QtWidgets.QPushButton("Smaller")
-        self.btn_inc = QtWidgets.QPushButton("Bigger")
+        scale_row.addWidget(QtWidgets.QLabel("Scale:"))
+        self.btn_dec = QtWidgets.QPushButton("−")
+        self.btn_dec.setFixedWidth(26)
+        self.btn_inc = QtWidgets.QPushButton("+")
+        self.btn_inc.setFixedWidth(26)
         self.scale_box = QtWidgets.QDoubleSpinBox()
         self.scale_box.setRange(0.10, 5.00)
         self.scale_box.setDecimals(2)
         self.scale_box.setSingleStep(0.05)
         self.scale_box.setValue(float(start_scale))
-        self.scale_box.setFixedWidth(90)
-
+        self.scale_box.setFixedWidth(68)
         scale_row.addWidget(self.btn_dec)
         scale_row.addWidget(self.btn_inc)
         scale_row.addStretch(1)
         scale_row.addWidget(self.scale_box)
-        v.addLayout(scale_row)
-
+        tv.addLayout(scale_row)
         self.btn_dec.clicked.connect(self._dec_scale)
         self.btn_inc.clicked.connect(self._inc_scale)
         self.scale_box.valueChanged.connect(lambda x: self.scaleChanged.emit(float(x)))
 
-        v.addSpacing(6)
-
-        self.btn_def_colors = QtWidgets.QPushButton("Default Colors")
-        v.addWidget(self.btn_def_colors)
+        tv.addSpacing(6)
+        self.btn_def_colors = QtWidgets.QPushButton("Reset Colors")
+        tv.addWidget(self.btn_def_colors)
         self.btn_def_colors.clicked.connect(self.resetColors)
 
-        v.addSpacing(8)
+        tv.addStretch(1)
+        tabs.addTab(types_page, "Types")
 
-        kb_title = QtWidgets.QLabel("Keybinds")
-        f2 = kb_title.font()
-        f2.setBold(True)
-        kb_title.setFont(f2)
-        v.addWidget(kb_title)
+        # ── Tab 2: Keybinds ───────────────────────────────────────────
+        kb_page = QtWidgets.QWidget()
+        kv = QtWidgets.QVBoxLayout(kb_page)
+        kv.setContentsMargins(8, 8, 8, 8)
+        kv.setSpacing(4)
 
         self.kb_rows = {}
         for action, label in binds_label_map.items():
             row = QtWidgets.QHBoxLayout()
             row.addWidget(QtWidgets.QLabel(label))
             row.addStretch(1)
+            cur_lbl = QtWidgets.QLabel(binds_current.get(action, ""))
+            cur_lbl.setStyleSheet("color:#90a0ff;")
+            cur_lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            row.addWidget(cur_lbl)
             btn = QtWidgets.QPushButton("Set")
-            btn.setFixedWidth(60)
+            btn.setFixedWidth(36)
             row.addWidget(btn)
-            v.addLayout(row)
-            self.kb_rows[action] = btn
+            kv.addLayout(row)
+            self.kb_rows[action] = (btn, cur_lbl)
             btn.clicked.connect(lambda _, a=action: self.requestBindEdit.emit(a))
 
-        v.addSpacing(8)
+        kv.addStretch(1)
+        tabs.addTab(kb_page, "Keybinds")
 
-        self.chk_tray = self._create_option(v, "Minimize to system tray", start_min_to_tray, self.minimizeToTrayChanged)
-        self.chk_hold_tab = self._create_option(v, "Hold Tab to show overlay", start_hold_tab_mode, self.holdTabModeChanged)
-        self.chk_safe_tab = self._create_option(v, "Lock Tab while Ctrl/Shift/Alt held", start_safe_tab_mode, self.safeTabModeChanged)
+        # ── Tab 3: Settings ───────────────────────────────────────────
+        cfg_page = QtWidgets.QWidget()
+        cv = QtWidgets.QVBoxLayout(cfg_page)
+        cv.setContentsMargins(8, 8, 8, 8)
+        cv.setSpacing(6)
 
-        v.addSpacing(6)
+        self.chk_tray = QtWidgets.QCheckBox("Minimize to system tray")
+        self.chk_tray.setChecked(bool(start_min_to_tray))
+        cv.addWidget(self.chk_tray)
+        self.chk_tray.toggled.connect(lambda b: self.minimizeToTrayChanged.emit(bool(b)))
 
+        self.chk_hold_tab = QtWidgets.QCheckBox("Hold Tab to show overlay")
+        self.chk_hold_tab.setChecked(bool(start_hold_tab_mode))
+        cv.addWidget(self.chk_hold_tab)
+        self.chk_hold_tab.toggled.connect(lambda b: self.holdTabModeChanged.emit(bool(b)))
+
+        self.chk_block_shift_tab = QtWidgets.QCheckBox("Block Shift+Tab")
+        self.chk_block_shift_tab.setChecked(bool(start_block_shift_tab))
+        cv.addWidget(self.chk_block_shift_tab)
+        self.chk_block_shift_tab.toggled.connect(lambda b: self.blockShiftTabChanged.emit(bool(b)))
+
+        cv.addSpacing(4)
         self.btn_reset_cfg = QtWidgets.QPushButton("Reset to Default Config")
-        v.addWidget(self.btn_reset_cfg)
+        cv.addWidget(self.btn_reset_cfg)
         self.btn_reset_cfg.clicked.connect(self.resetConfig)
 
-        v.addSpacing(8)
+        cv.addSpacing(8)
 
-        v.addWidget(QtWidgets.QLabel("Controls"))
-        self.help = QtWidgets.QTextEdit()
-        self.help.setReadOnly(True)
-        self.help.setFixedHeight(210)
-        self.help.setStyleSheet("QTextEdit{background:#202225;border:1px solid #3a3c40;}")
-        self.help.setText(help_text)
-        v.addWidget(self.help)
+        update_row = QtWidgets.QHBoxLayout()
+        self.update_label = QtWidgets.QLabel("Data: checking...")
+        self.update_label.setStyleSheet("color:#666666;font-size:11px;")
+        update_row.addWidget(self.update_label)
+        update_row.addStretch(1)
+        self.btn_force_refresh = QtWidgets.QPushButton("Force Refresh")
+        self.btn_force_refresh.setFixedWidth(90)
+        update_row.addWidget(self.btn_force_refresh)
+        cv.addLayout(update_row)
+        self.btn_force_refresh.clicked.connect(self.forceRefresh)
 
-        v.addStretch(1)
+        cv.addSpacing(2)
+        info_style = "color:#555555;font-size:11px;"
+        lbl_info = QtWidgets.QLabel(f"Aspect: {aspect}  |  v{config_version}")
+        lbl_info.setStyleSheet(info_style)
+        cv.addWidget(lbl_info)
+        lbl_path = QtWidgets.QLabel("%LOCALAPPDATA%\\HuntOverlay")
+        lbl_path.setStyleSheet(info_style)
+        cv.addWidget(lbl_path)
 
-    def _create_option(self, v, title, start_val, func):
-        widget = QtWidgets.QCheckBox(title)
-        widget.setChecked(bool(start_val))
-        v.addWidget(widget)
-        widget.toggled.connect(lambda b: func.emit(bool(b)))
-        return widget
+        cv.addStretch(1)
+        tabs.addTab(cfg_page, "Settings")
 
     def _dec_scale(self):
         self.scale_box.setValue(max(self.scale_box.minimum(), self.scale_box.value() - 0.05))
@@ -820,10 +939,17 @@ class Panel(QtWidgets.QWidget):
             self.cmb.setCurrentIndex(i)
             self.cmb.blockSignals(False)
 
-    def setHelpText(self, txt: str):
-        self.help.setText(txt)
+    def setLastUpdateText(self, txt: str):
+        self.update_label.setText(txt)
+
+    def setKeybindLabel(self, action: str, txt: str):
+        entry = self.kb_rows.get(action)
+        if entry:
+            entry[1].setText(txt)
 
 class Overlay(QtWidgets.QWidget):
+    dataUpdateFinished = QtCore.Signal(str)  # emits timestamp string
+
     def __init__(self):
         super().__init__(None, QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
@@ -884,8 +1010,8 @@ class Overlay(QtWidgets.QWidget):
             "map_4": "Map 4  Mammon",
             "hide_hovered": "Hide hovered POI",
         }
-        help_text = self._build_help_text()
-        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, help_text, binds_label_map, self.minimize_to_tray, self.hold_tab_mode, self.safe_tab_mode)
+        binds_current = {a: self._bind_label(a) for a in binds_label_map}
+        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, binds_label_map, binds_current, self.aspect, CONFIG_VERSION, self.minimize_to_tray, self.hold_tab_mode, self.block_shift_tab)
         if ICON:
             self.panel.setWindowIcon(QtGui.QIcon(ICON))
 
@@ -900,7 +1026,8 @@ class Overlay(QtWidgets.QWidget):
         self.panel.resetConfig.connect(self._reset_config_to_defaults)
         self.panel.minimizeToTrayChanged.connect(self._set_minimize_to_tray)
         self.panel.holdTabModeChanged.connect(self._set_hold_tab_mode)
-        self.panel.safeTabModeChanged.connect(self._set_safe_tab_mode)
+        self.panel.blockShiftTabChanged.connect(self._set_block_shift_tab)
+        self.panel.forceRefresh.connect(self._force_data_refresh)
 
         # Seed GUI with current state.
         self.panel.chk_nums.setChecked(self.num_sw)
@@ -955,6 +1082,11 @@ class Overlay(QtWidgets.QWidget):
 
         # Minimize to tray needs access to the panel state changes.
         self.panel.installEventFilter(self)
+
+        # Wire data update signal and seed the label with last known timestamp.
+        self.dataUpdateFinished.connect(self._on_data_update_finished)
+        self.panel.setLastUpdateText(format_last_update(load_update_meta().get("last_check", "")))
+        self._start_update_check()
 
     def eventFilter(self, obj, ev):
         if obj is self.panel:
@@ -1013,21 +1145,51 @@ class Overlay(QtWidgets.QWidget):
     def _set_minimize_to_tray(self, v: bool):
         self.minimize_to_tray = bool(v)
         self._save()
-
     def _set_hold_tab_mode(self, v: bool):
-
         self.hold_tab_mode = bool(v)
-
         self._save()
 
-        self.panel.setHelpText(self._build_help_text())
-
-    def _set_safe_tab_mode(self, v: bool):
-        self.safe_tab_mode = bool(v)
-
+    def _set_block_shift_tab(self, v: bool):
+        self.block_shift_tab = bool(v)
         self._save()
 
-        self.panel.setHelpText(self._build_help_text())
+    def _force_data_refresh(self):
+        self.panel.setLastUpdateText("Data: updating...")
+        self.panel.btn_force_refresh.setEnabled(False)
+        t = threading.Thread(target=self._run_data_update, daemon=True)
+        t.start()
+
+    def _start_update_check(self):
+        if needs_data_update():
+            self.panel.setLastUpdateText("Data: updating...")
+            t = threading.Thread(target=self._run_data_update, daemon=True)
+            t.start()
+
+    def _run_data_update(self):
+        """Runs in a background thread. Downloads both files then emits the finished signal."""
+        ok_data  = fetch_remote_file(DATA_URL,  DATA_PATH)
+        ok_style = fetch_remote_file(STYLE_URL, STYLE_PATH)
+        ts = datetime.now().isoformat(timespec="seconds") if (ok_data or ok_style) else ""
+        meta = load_update_meta()
+        if ok_data or ok_style:
+            meta["last_check"] = ts
+            save_update_meta(meta)
+        self.dataUpdateFinished.emit(ts)
+
+    def _on_data_update_finished(self, ts: str):
+        """Slot — runs on the main thread after the background download completes."""
+        if ts:
+            try:
+                self.game_data = load_json(DATA_PATH)
+                self.fmt = detect_data_format(self.game_data)
+                self.poi_style = load_json(STYLE_PATH)
+                self.type_specs = self._build_type_specs()
+                self._rebuild_all_caches()
+                self.update()
+            except Exception:
+                pass
+        self.panel.setLastUpdateText(format_last_update(ts if ts else load_update_meta().get("last_check", "")))
+        self.panel.btn_force_refresh.setEnabled(True)
 
     def _build_type_specs(self):
         specs = {}
@@ -1113,7 +1275,8 @@ class Overlay(QtWidgets.QWidget):
 
         self.minimize_to_tray = bool(st.get("minimize_to_tray", False))
         self.hold_tab_mode = bool(st.get("hold_tab_to_show", False))
-        self.safe_tab_mode = bool(st.get("use_safe_tab_mode", True))
+        self.block_shift_tab = bool(st.get("block_shift_tab", True))
+
 
         self.binds = self._normalize_keybinds(st.get("keybinds", {}))
 
@@ -1160,9 +1323,9 @@ class Overlay(QtWidgets.QWidget):
             return False
         if vk == 0:
             return False
-
-        safe_tab_violation = self.safe_tab_mode and (key(VK_CONTROL) or key(VK_MENU) or key(VK_SHIFT))
-        if vk == VK_TAB and safe_tab_violation:
+        if vk == VK_TAB and (key(VK_CONTROL) or key(VK_MENU)):
+            return False
+        if vk == VK_TAB and self.block_shift_tab and key(VK_SHIFT):
             return False
 
         if name == "hide_hovered":
@@ -1193,20 +1356,6 @@ class Overlay(QtWidgets.QWidget):
 
         return vk_to_label(vk)
 
-    def _build_help_text(self) -> str:
-        return (
-            f"{self._bind_label('toggle_master'):12s} Toggle master on or off\n"
-            f"{self._bind_label('toggle_overlay'):12s} {'Hold to show overlay' if self.hold_tab_mode else 'Show or hide overlay'}\n"
-            f"{self._bind_label('hide_overlay'):12s} Hide overlay\n"
-            f"{vk_to_label(self.binds['map_1']['vk'])} {vk_to_label(self.binds['map_2']['vk'])} {vk_to_label(self.binds['map_3']['vk'])} {vk_to_label(self.binds['map_4']['vk'])}      Switch map (if enabled)\n"
-            f"{self._bind_label('hide_hovered')}   Hide hovered POI for current category only\n"
-            "\n"
-            f"Detected aspect: {self.aspect}\n"
-            f"Config version: {self.data.get('version','?')}\n"
-            "Files are stored at:\n"
-            "%LOCALAPPDATA%\\HuntOverlay\n"
-        )
-
     def _save(self):
         st = self.data.setdefault("settings", {})
         self.data["version"] = CONFIG_VERSION
@@ -1218,7 +1367,7 @@ class Overlay(QtWidgets.QWidget):
         st["global_scale"] = float(self.global_scale)
         st["minimize_to_tray"] = bool(self.minimize_to_tray)
         st["hold_tab_to_show"] = bool(self.hold_tab_mode)
-        st["use_safe_tab_mode"] = bool(self.safe_tab_mode)
+        st["block_shift_tab"] = bool(self.block_shift_tab)
 
         st["types"] = self.types
         st["keybinds"] = self.binds
@@ -1315,15 +1464,16 @@ class Overlay(QtWidgets.QWidget):
         self.panel.chk_nums.setChecked(self.num_sw)
         self.panel.chk_tray.setChecked(self.minimize_to_tray)
         self.panel.chk_hold_tab.setChecked(self.hold_tab_mode)
-        self.panel.chk_safe_tab.setChecked(self.safe_tab_mode)
+        self.panel.chk_block_shift_tab.setChecked(self.block_shift_tab)
         self.panel.scale_box.setValue(float(self.global_scale))
         self.panel.setMap(self.prof)
 
         for k in self.type_order:
             self.panel.setTypeState(k, self.types[k]["enabled"], rgb2q(self.types[k]["color"], self.type_specs[k]["default_fill"]))
 
-        # Refresh help text because keybinds and aspect might differ.
-        self.panel.setHelpText(self._build_help_text())
+        # Refresh keybind labels.
+        for action in self.binds:
+            self.panel.setKeybindLabel(action, self._bind_label(action))
 
         # Apply overlay visibility state.
         (self.show if self.visible and self.master else self.hide)()
@@ -1524,7 +1674,7 @@ class Overlay(QtWidgets.QWidget):
             self.binds[action]["shift"] = bool(b.get("shift", True))
 
         self._save()
-        self.panel.setHelpText(self._build_help_text())
+        self.panel.setKeybindLabel(action, self._bind_label(action))
 
     def paintEvent(self, _):
         if not (self.master and self.visible and self.rect):
