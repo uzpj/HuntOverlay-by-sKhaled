@@ -19,38 +19,6 @@
 #   Applies a screen rectangle per map based on detected aspect ratio
 #   Draws POIs in that rectangle using normalized coordinates derived from a 4096x4096 grid
 #
-# New features in this version
-#
-# Hold to show overlay:
-# Added a "Hold Tab to show overlay" checkbox in the panel.
-# When enabled, the overlay is visible only while the toggle key is held.
-# When disabled, the overlay uses the existing toggle behavior.
-# The setting is persisted to config.json and reloads correctly after reset.
-#
-# Tab safety logic:
-# The overlay toggle key (Tab by default) is ignored while Ctrl, Alt, or Shift
-# are held. This prevents accidental overlay activation during combinations
-# such as Alt+Tab, Ctrl+Tab, or Shift+Tab.
-#
-# Startup behavior and tray handling
-# The application now starts minimized to the system tray if you have it set to start meinimized.
-# Fresh configs default to tray-minimize disabled.
-#
-# Primary monitor enforcement
-# The overlay window geometry is explicitly bound to QGuiApplication.primaryScreen().
-# Each time the overlay is shown, geometry is re-applied to ensure it opens
-# on the primary monitor.
-#
-# New POI type: brutes
-# Added support for the "brutes" category:
-# - Included in type order and drawing pass
-# - Loaded from poiData.json like other styled categories ( Still Empty As Of Right Now )  
-#
-# Config version update
-# Retained guard against invalid indexed map names (MAPS.index).
-# Bumped CONFIG_VERSION to trigger migration to updated defaults and settings.
-
-
 # Hide behavior note
 # If you hide a POI while hovering possible_xp, it only hides it from possible_xp,
 # not from its source category (armories, towers, big_towers).
