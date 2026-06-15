@@ -47,6 +47,14 @@
     "fillColor": "FireBrick",
     "radius": 18
   },
+  "brute": {
+    "type": "brute",
+    "label": "Brutes",
+    "categories": "brutes",
+    "borderColor": "White",
+    "fillColor": "#4b2e1f",
+    "radius": 18
+  },
   "beetle": {
     "type": "beetle",
     "label": "Beetles",
