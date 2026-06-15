@@ -19,22 +19,29 @@
 #   Applies a screen rectangle per map based on detected aspect ratio
 #   Draws POIs in that rectangle using normalized coordinates derived from a 4096x4096 grid
 #
+# New features in this version
+# Multi language support (English, Chinese, Russian, Spanish).
+# All user facing text runs through a small translation layer (i18n.py); English is
+# the source of truth and missing translations fall back to English. A "Language:"
+# dropdown in the Settings tab switches language live and is saved to config.json.
+
 # Hide behavior note
 # If you hide a POI while hovering possible_xp, it only hides it from possible_xp,
 # not from its source category (armories, towers, big_towers).
 # Hidden POIs are stored per category in config.json.
 
-# Possible Future Update:
-# Adding the ability to retain config settings through version updates.
 import sys, os, json, ctypes, traceback, shutil, threading
 import urllib.request, urllib.error
 from datetime import datetime, timedelta
 from PySide6 import QtCore, QtGui, QtWidgets
+# Translation layer. tr() wraps every user facing string; see i18n.py.
+import i18n
+from i18n import tr
 
 # Map order is intentionally set to the release order requested.
 MAPS = ["Stillwater Bayou", "Lawson Delta", "DeSalle", "Mammon's Gulch"]
 
-CONFIG_VERSION = "1.2.0"
+CONFIG_VERSION = "1.2.1"
 
 user32 = ctypes.windll.user32
 GetKey = user32.GetAsyncKeyState
@@ -158,12 +165,12 @@ def fetch_remote_file(url: str, dst: str) -> bool:
 
 def format_last_update(ts: str) -> str:
     if not ts:
-        return "Data: never updated"
+        return tr("Data: never updated")
     try:
         dt = datetime.fromisoformat(ts)
-        return "Data updated: " + dt.strftime("%Y-%m-%d %H:%M")
+        return tr("Data updated: ") + dt.strftime("%Y-%m-%d %H:%M")
     except:
-        return "Data: unknown"
+        return tr("Data: unknown")
 
 def q2rgb(c: QtGui.QColor):
     return [c.red(), c.green(), c.blue()]
@@ -344,6 +351,7 @@ def build_default_config():
         "version": CONFIG_VERSION,
         "profiles": profiles,
         "settings": {
+            "language": "en",
             "enable_num_switch": True,
             "selected_map": MAPS[0],
             "visible_overlay": False,
@@ -417,14 +425,14 @@ class KeyCaptureDialog(QtWidgets.QDialog):
     """
     def __init__(self, action_name: str, p=None):
         super().__init__(p)
-        self.setWindowTitle(f"Set keybind: {action_name}")
+        self.setWindowTitle(tr("Set keybind: ") + str(action_name))
         self.setModal(True)
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
 
         self.result_bind = None
 
         v = QtWidgets.QVBoxLayout(self)
-        lbl = QtWidgets.QLabel("Press a key now\nCtrl Alt Shift are captured too\nEsc cancels")
+        lbl = QtWidgets.QLabel(tr("Press a key now\nCtrl Alt Shift are captured too\nEsc cancels"))
         lbl.setAlignment(QtCore.Qt.AlignCenter)
         v.addWidget(lbl)
 
@@ -512,7 +520,7 @@ class SVPad(QtWidgets.QWidget):
 class AdvColorDlg(QtWidgets.QDialog):
     def __init__(self, start: QtGui.QColor, p=None):
         super().__init__(p)
-        self.setWindowTitle("Pick Color")
+        self.setWindowTitle(tr("Pick Color"))
         self.setModal(True)
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
         self.setStyleSheet(
@@ -559,7 +567,7 @@ class AdvColorDlg(QtWidgets.QDialog):
 
         v = QtWidgets.QVBoxLayout(self)
         v.addWidget(self.pad)
-        v.addWidget(QtWidgets.QLabel("Hue"))
+        v.addWidget(QtWidgets.QLabel(tr("Hue")))
         v.addWidget(self.h)
         rgb = QtWidgets.QHBoxLayout()
         rgb.addLayout(row("R", self.r))
@@ -567,16 +575,16 @@ class AdvColorDlg(QtWidgets.QDialog):
         rgb.addLayout(row("B", self.b))
         v.addLayout(rgb)
         hh = QtWidgets.QHBoxLayout()
-        hh.addWidget(QtWidgets.QLabel("Hex"))
+        hh.addWidget(QtWidgets.QLabel(tr("Hex")))
         hh.addWidget(self.hex)
         hh.addStretch(1)
         hh.addWidget(self.prev)
         v.addLayout(hh)
-        v.addWidget(QtWidgets.QLabel("Presets"))
+        v.addWidget(QtWidgets.QLabel(tr("Presets")))
         v.addLayout(grid)
         bt = QtWidgets.QHBoxLayout()
-        ok = QtWidgets.QPushButton("OK")
-        ca = QtWidgets.QPushButton("Cancel")
+        ok = QtWidgets.QPushButton(tr("OK"))
+        ca = QtWidgets.QPushButton(tr("Cancel"))
         bt.addStretch(1)
         bt.addWidget(ok)
         bt.addWidget(ca)
@@ -710,11 +718,18 @@ class Panel(QtWidgets.QWidget):
     holdTabModeChanged = QtCore.Signal(bool)
     blockShiftTabChanged = QtCore.Signal(bool)
     forceRefresh = QtCore.Signal()
+    languageChanged = QtCore.Signal(str)
 
 
-    def __init__(self, type_order, type_specs, start_scale: float, binds_label_map: dict, binds_current: dict, aspect: str, config_version: str, start_min_to_tray: bool, start_hold_tab_mode: bool, start_block_shift_tab: bool, p=None):
+    def __init__(self, type_order, type_specs, start_scale: float, binds_label_map: dict, binds_current: dict, aspect: str, config_version: str, start_min_to_tray: bool, start_hold_tab_mode: bool, start_block_shift_tab: bool, start_language: str, p=None):
         super().__init__(p, QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
-        self.setWindowTitle("Hunt Map Overlay")
+        # Keep references needed for live re-translation.
+        self.type_order = type_order
+        self.type_specs = type_specs
+        self.binds_label_map = binds_label_map
+        self.aspect = aspect
+        self.config_version = config_version
+        self.setWindowTitle(tr("Hunt Map Overlay"))
         self.setFixedWidth(310)
         self.setStyleSheet(
             "QWidget{background:#1e1f22;color:#e6e6e6;font-size:12px;}"
@@ -736,6 +751,7 @@ class Panel(QtWidgets.QWidget):
         outer.setSpacing(0)
 
         tabs = QtWidgets.QTabWidget()
+        self.tabs = tabs
         outer.addWidget(tabs)
 
         # ── Tab 1: Types ──────────────────────────────────────────────
@@ -747,7 +763,7 @@ class Panel(QtWidgets.QWidget):
         self.type_widgets = {}
         for tkey in type_order:
             spec = type_specs[tkey]
-            chk = QtWidgets.QCheckBox(spec["label"])
+            chk = QtWidgets.QCheckBox(tr(spec["label"]))
             chip = DotChip(spec["default_fill"], spec["border"])
             row = QtWidgets.QHBoxLayout()
             row.setSpacing(4)
@@ -767,21 +783,26 @@ class Panel(QtWidgets.QWidget):
         tv.addSpacing(6)
 
         map_row = QtWidgets.QHBoxLayout()
-        map_row.addWidget(QtWidgets.QLabel("Map:"))
+        self.map_lbl = QtWidgets.QLabel(tr("Map:"))
+        map_row.addWidget(self.map_lbl)
         self.cmb = QtWidgets.QComboBox()
-        self.cmb.addItems(MAPS)
+        # Display the translated map name but carry the English key as item data so
+        # data lookups, config keys and switch() all stay English under the hood.
+        for m in MAPS:
+            self.cmb.addItem(tr(m), m)
         map_row.addWidget(self.cmb, 1)
         tv.addLayout(map_row)
-        self.cmb.currentTextChanged.connect(self.mapSel)
+        self.cmb.currentIndexChanged.connect(self._emit_map_sel)
 
-        self.chk_nums = QtWidgets.QCheckBox("1–4 map switch")
+        self.chk_nums = QtWidgets.QCheckBox(tr("1–4 map switch"))
         tv.addWidget(self.chk_nums)
         self.chk_nums.toggled.connect(self.tnums)
 
         tv.addSpacing(6)
 
         scale_row = QtWidgets.QHBoxLayout()
-        scale_row.addWidget(QtWidgets.QLabel("Scale:"))
+        self.scale_lbl = QtWidgets.QLabel(tr("Scale:"))
+        scale_row.addWidget(self.scale_lbl)
         self.btn_dec = QtWidgets.QPushButton("−")
         self.btn_dec.setFixedWidth(26)
         self.btn_inc = QtWidgets.QPushButton("+")
@@ -802,12 +823,12 @@ class Panel(QtWidgets.QWidget):
         self.scale_box.valueChanged.connect(lambda x: self.scaleChanged.emit(float(x)))
 
         tv.addSpacing(6)
-        self.btn_def_colors = QtWidgets.QPushButton("Reset Colors")
+        self.btn_def_colors = QtWidgets.QPushButton(tr("Reset Colors"))
         tv.addWidget(self.btn_def_colors)
         self.btn_def_colors.clicked.connect(self.resetColors)
 
         tv.addStretch(1)
-        tabs.addTab(types_page, "Types")
+        tabs.addTab(types_page, tr("Types"))
 
         # ── Tab 2: Keybinds ───────────────────────────────────────────
         kb_page = QtWidgets.QWidget()
@@ -816,23 +837,26 @@ class Panel(QtWidgets.QWidget):
         kv.setSpacing(4)
 
         self.kb_rows = {}
+        self.kb_name_labels = {}
         for action, label in binds_label_map.items():
             row = QtWidgets.QHBoxLayout()
-            row.addWidget(QtWidgets.QLabel(label))
+            name_lbl = QtWidgets.QLabel(tr(label))
+            row.addWidget(name_lbl)
             row.addStretch(1)
             cur_lbl = QtWidgets.QLabel(binds_current.get(action, ""))
             cur_lbl.setStyleSheet("color:#90a0ff;")
             cur_lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
             row.addWidget(cur_lbl)
-            btn = QtWidgets.QPushButton("Set")
+            btn = QtWidgets.QPushButton(tr("Set"))
             btn.setFixedWidth(36)
             row.addWidget(btn)
             kv.addLayout(row)
             self.kb_rows[action] = (btn, cur_lbl)
+            self.kb_name_labels[action] = name_lbl
             btn.clicked.connect(lambda _, a=action: self.requestBindEdit.emit(a))
 
         kv.addStretch(1)
-        tabs.addTab(kb_page, "Keybinds")
+        tabs.addTab(kb_page, tr("Keybinds"))
 
         # ── Tab 3: Settings ───────────────────────────────────────────
         cfg_page = QtWidgets.QWidget()
@@ -840,34 +864,50 @@ class Panel(QtWidgets.QWidget):
         cv.setContentsMargins(8, 8, 8, 8)
         cv.setSpacing(6)
 
-        self.chk_tray = QtWidgets.QCheckBox("Minimize to system tray")
+        # Language selector sits at the very top of Settings.
+        lang_row = QtWidgets.QHBoxLayout()
+        self.lang_lbl = QtWidgets.QLabel(tr("Language:"))
+        lang_row.addWidget(self.lang_lbl)
+        self.cmb_lang = QtWidgets.QComboBox()
+        for code, name in i18n.LANGUAGES:
+            self.cmb_lang.addItem(name, code)
+        li = self.cmb_lang.findData(start_language)
+        if li >= 0:
+            self.cmb_lang.setCurrentIndex(li)
+        lang_row.addWidget(self.cmb_lang, 1)
+        cv.addLayout(lang_row)
+        self.cmb_lang.currentIndexChanged.connect(self._emit_lang_changed)
+
+        cv.addSpacing(4)
+
+        self.chk_tray = QtWidgets.QCheckBox(tr("Minimize to system tray"))
         self.chk_tray.setChecked(bool(start_min_to_tray))
         cv.addWidget(self.chk_tray)
         self.chk_tray.toggled.connect(lambda b: self.minimizeToTrayChanged.emit(bool(b)))
 
-        self.chk_hold_tab = QtWidgets.QCheckBox("Hold Tab to show overlay")
+        self.chk_hold_tab = QtWidgets.QCheckBox(tr("Hold Tab to show overlay"))
         self.chk_hold_tab.setChecked(bool(start_hold_tab_mode))
         cv.addWidget(self.chk_hold_tab)
         self.chk_hold_tab.toggled.connect(lambda b: self.holdTabModeChanged.emit(bool(b)))
 
-        self.chk_block_shift_tab = QtWidgets.QCheckBox("Block Shift+Tab")
+        self.chk_block_shift_tab = QtWidgets.QCheckBox(tr("Block Shift+Tab"))
         self.chk_block_shift_tab.setChecked(bool(start_block_shift_tab))
         cv.addWidget(self.chk_block_shift_tab)
         self.chk_block_shift_tab.toggled.connect(lambda b: self.blockShiftTabChanged.emit(bool(b)))
 
         cv.addSpacing(4)
-        self.btn_reset_cfg = QtWidgets.QPushButton("Reset to Default Config")
+        self.btn_reset_cfg = QtWidgets.QPushButton(tr("Reset to Default Config"))
         cv.addWidget(self.btn_reset_cfg)
         self.btn_reset_cfg.clicked.connect(self.resetConfig)
 
         cv.addSpacing(8)
 
         update_row = QtWidgets.QHBoxLayout()
-        self.update_label = QtWidgets.QLabel("Data: checking...")
+        self.update_label = QtWidgets.QLabel(tr("Data: checking..."))
         self.update_label.setStyleSheet("color:#666666;font-size:11px;")
         update_row.addWidget(self.update_label)
         update_row.addStretch(1)
-        self.btn_force_refresh = QtWidgets.QPushButton("Force Refresh")
+        self.btn_force_refresh = QtWidgets.QPushButton(tr("Force Refresh"))
         self.btn_force_refresh.setFixedWidth(90)
         update_row.addWidget(self.btn_force_refresh)
         cv.addLayout(update_row)
@@ -875,21 +915,78 @@ class Panel(QtWidgets.QWidget):
 
         cv.addSpacing(2)
         info_style = "color:#555555;font-size:11px;"
-        lbl_info = QtWidgets.QLabel(f"Aspect: {aspect}  |  v{config_version}")
-        lbl_info.setStyleSheet(info_style)
-        cv.addWidget(lbl_info)
+        self.lbl_info = QtWidgets.QLabel(f"Aspect: {aspect}  |  v{config_version}")
+        self.lbl_info.setStyleSheet(info_style)
+        cv.addWidget(self.lbl_info)
         lbl_path = QtWidgets.QLabel("%LOCALAPPDATA%\\HuntOverlay")
         lbl_path.setStyleSheet(info_style)
         cv.addWidget(lbl_path)
 
         cv.addStretch(1)
-        tabs.addTab(cfg_page, "Settings")
+        tabs.addTab(cfg_page, tr("Settings"))
 
     def _dec_scale(self):
         self.scale_box.setValue(max(self.scale_box.minimum(), self.scale_box.value() - 0.05))
 
     def _inc_scale(self):
         self.scale_box.setValue(min(self.scale_box.maximum(), self.scale_box.value() + 0.05))
+
+    def _emit_map_sel(self, _idx: int):
+        # Emit the English map key (item data), not the translated display text.
+        key = self.cmb.currentData()
+        if key:
+            self.mapSel.emit(str(key))
+
+    def _emit_lang_changed(self, _idx: int):
+        code = self.cmb_lang.currentData()
+        if code:
+            self.languageChanged.emit(str(code))
+
+    def retranslate_ui(self):
+        """Re-apply tr() to every static widget after the language changes.
+        Per-keybind key labels (e.g. 'Tab') are refreshed by the Overlay via
+        setKeybindLabel since they depend on runtime bind state."""
+        self.setWindowTitle(tr("Hunt Map Overlay"))
+
+        # Tabs (index order: Types, Keybinds, Settings).
+        self.tabs.setTabText(0, tr("Types"))
+        self.tabs.setTabText(1, tr("Keybinds"))
+        self.tabs.setTabText(2, tr("Settings"))
+
+        # Type checkboxes.
+        for tkey in self.type_order:
+            chk, _chip = self.type_widgets[tkey]
+            chk.setText(tr(self.type_specs[tkey]["label"]))
+
+        # Types tab controls.
+        self.map_lbl.setText(tr("Map:"))
+        self.chk_nums.setText(tr("1–4 map switch"))
+        self.scale_lbl.setText(tr("Scale:"))
+        self.btn_def_colors.setText(tr("Reset Colors"))
+
+        # Map combobox display text (keep selection and English item data).
+        self.cmb.blockSignals(True)
+        for i in range(self.cmb.count()):
+            key = self.cmb.itemData(i)
+            self.cmb.setItemText(i, tr(str(key)))
+        self.cmb.blockSignals(False)
+
+        # Keybind action name labels and Set buttons.
+        for action, lbl in self.binds_label_map.items():
+            if action in self.kb_name_labels:
+                self.kb_name_labels[action].setText(tr(lbl))
+            entry = self.kb_rows.get(action)
+            if entry:
+                entry[0].setText(tr("Set"))
+
+        # Settings tab.
+        self.lang_lbl.setText(tr("Language:"))
+        self.chk_tray.setText(tr("Minimize to system tray"))
+        self.chk_hold_tab.setText(tr("Hold Tab to show overlay"))
+        self.chk_block_shift_tab.setText(tr("Block Shift+Tab"))
+        self.btn_reset_cfg.setText(tr("Reset to Default Config"))
+        self.btn_force_refresh.setText(tr("Force Refresh"))
+        self.lbl_info.setText(f"Aspect: {self.aspect}  |  v{self.config_version}")
 
     def setTypeState(self, tkey: str, enabled: bool, fill_color: QtGui.QColor):
         chk, chip = self.type_widgets[tkey]
@@ -901,7 +998,7 @@ class Panel(QtWidgets.QWidget):
         chk.blockSignals(False)
 
     def setMap(self, name: str):
-        i = self.cmb.findText(name)
+        i = self.cmb.findData(name)
         if i >= 0:
             self.cmb.blockSignals(True)
             self.cmb.setCurrentIndex(i)
@@ -979,7 +1076,7 @@ class Overlay(QtWidgets.QWidget):
             "hide_hovered": "Hide hovered POI",
         }
         binds_current = {a: self._bind_label(a) for a in binds_label_map}
-        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, binds_label_map, binds_current, self.aspect, CONFIG_VERSION, self.minimize_to_tray, self.hold_tab_mode, self.block_shift_tab)
+        self.panel = Panel(self.type_order, self.type_specs, self.global_scale, binds_label_map, binds_current, self.aspect, CONFIG_VERSION, self.minimize_to_tray, self.hold_tab_mode, self.block_shift_tab, self.language)
         if ICON:
             self.panel.setWindowIcon(QtGui.QIcon(ICON))
 
@@ -996,6 +1093,7 @@ class Overlay(QtWidgets.QWidget):
         self.panel.holdTabModeChanged.connect(self._set_hold_tab_mode)
         self.panel.blockShiftTabChanged.connect(self._set_block_shift_tab)
         self.panel.forceRefresh.connect(self._force_data_refresh)
+        self.panel.languageChanged.connect(self._set_language)
 
         # Seed GUI with current state.
         self.panel.chk_nums.setChecked(self.num_sw)
@@ -1079,8 +1177,8 @@ class Overlay(QtWidgets.QWidget):
             self.tray.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
 
         menu = QtWidgets.QMenu()
-        act_restore = QtGui.QAction("Restore panel", menu)
-        act_quit = QtGui.QAction("Quit", menu)
+        act_restore = QtGui.QAction(tr("Restore panel"), menu)
+        act_quit = QtGui.QAction(tr("Quit"), menu)
         menu.addAction(act_restore)
         menu.addSeparator()
         menu.addAction(act_quit)
@@ -1101,7 +1199,7 @@ class Overlay(QtWidgets.QWidget):
         self.panel.hide()
         self.panel.setWindowState(QtCore.Qt.WindowNoState)
         try:
-            self.tray.showMessage("HuntOverlay", "Panel minimized to tray", QtWidgets.QSystemTrayIcon.Information, 1500)
+            self.tray.showMessage("HuntOverlay", tr("Panel minimized to tray"), QtWidgets.QSystemTrayIcon.Information, 1500)
         except:
             pass
 
@@ -1120,6 +1218,19 @@ class Overlay(QtWidgets.QWidget):
     def _set_block_shift_tab(self, v: bool):
         self.block_shift_tab = bool(v)
         self._save()
+
+    def _set_language(self, code: str):
+        if not i18n.is_valid(code):
+            return
+        self.language = code
+        i18n.set_language(code)
+        self._save()
+        # Live re-translation of the panel plus runtime-dependent labels.
+        self.panel.retranslate_ui()
+        for action in self.binds:
+            self.panel.setKeybindLabel(action, self._bind_label(action))
+        self.panel.setLastUpdateText(format_last_update(load_update_meta().get("last_check", "")))
+        self.update()
 
     def _force_data_refresh(self):
         self.panel.setLastUpdateText("Data: updating...")
@@ -1172,7 +1283,9 @@ class Overlay(QtWidgets.QWidget):
 
         def add_from_style(category, fallback_label):
             spec = find_style_by_category(self.poi_style, category) or {}
-            label = spec.get("label", fallback_label)
+            # Keep the English label canonical for display so translation is
+            # deterministic and unaffected by the remote poiData.json refresh.
+            label = fallback_label
             border = qcolor_from_any(spec.get("borderColor", "#555555"), QtGui.QColor("#555555"))
             fill = qcolor_from_any(spec.get("fillColor", "#B4B4B4"), QtGui.QColor("#B4B4B4"))
             radius_px = overlay_radius_from_spec(spec.get("radius", 12))
@@ -1230,6 +1343,11 @@ class Overlay(QtWidgets.QWidget):
         st = d.get("settings", {}) if isinstance(d, dict) else {}
         if not isinstance(st, dict):
             st = {}
+
+        # Apply language first so every widget built afterwards is localized.
+        lang = st.get("language", "en")
+        self.language = lang if i18n.is_valid(lang) else "en"
+        i18n.set_language(self.language)
 
         self.num_sw = bool(st.get("enable_num_switch", True))
         sel = st.get("selected_map", MAPS[0])
@@ -1328,6 +1446,7 @@ class Overlay(QtWidgets.QWidget):
         st = self.data.setdefault("settings", {})
         self.data["version"] = CONFIG_VERSION
 
+        st["language"] = self.language
         st["enable_num_switch"] = self.num_sw
         st["selected_map"] = self.prof
         st["visible_overlay"] = self.visible
@@ -1427,6 +1546,15 @@ class Overlay(QtWidgets.QWidget):
 
         # Re apply map selection and rectangle because the selected map may have changed.
         self._apply_rect()
+
+        # Reset wiped the language back to default; reflect it in the selector and
+        # re-translate the panel before pushing other state in.
+        li = self.panel.cmb_lang.findData(self.language)
+        if li >= 0:
+            self.panel.cmb_lang.blockSignals(True)
+            self.panel.cmb_lang.setCurrentIndex(li)
+            self.panel.cmb_lang.blockSignals(False)
+        self.panel.retranslate_ui()
 
         # Push state back into GUI widgets.
         self.panel.chk_nums.setChecked(self.num_sw)
@@ -1681,7 +1809,7 @@ class Overlay(QtWidgets.QWidget):
 
         # Map label at top right.
         m = 20
-        txt = f"{self.prof}  ({self.aspect})"
+        txt = f"{tr(self.prof)}  ({self.aspect})"
         f = p.font()
         f.setBold(True)
         p.setFont(f)
@@ -1721,7 +1849,7 @@ if __name__ == "__main__":
     try:
         w = Overlay()
     except Exception as e:
-        QtWidgets.QMessageBox.critical(None, "HuntOverlay error", str(e))
+        QtWidgets.QMessageBox.critical(None, tr("HuntOverlay error"), str(e))
         sys.exit(1)
 
     sys.exit(app.exec())
